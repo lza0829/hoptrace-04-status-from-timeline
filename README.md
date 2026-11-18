@@ -30,3 +30,26 @@ npm run dev
 
 三栏测绘板：顶品牌条 + 中竖轴时间线 + 右检查器 + 底 hop 点阵。  
 不使用左轨编号导航、不使用顶栏流程 ribbon。
+
+## 状态投影：只能由正式时间线派生
+
+对外可读状态只有一个落库位置：`waybills.status_proj`。它由投影服务在
+「正式 hop 成功写入」的**同一事务**内整体替换，并同步追加状态证明
+（运单 / 末有效 hop / 映射码 / 投影值 / 时间线摘要 / 证明时刻）。
+
+- 映射唯一来源：`app.modules.status_from_timeline.EVENT_STATUS`。
+- 直接改投影入口 `POST /api/waybills/{id}/status` 一律 `409` 并回滚，
+  响应写明原因与正确做法；数据库触发器还会拒绝任何裸
+  `UPDATE waybills.status_proj`。
+- 只读证明接口 `GET /api/waybills/{id}/status-proof`，同源清单
+  `GET /api/status-check`，总览 `/api/overview` 的一致数直接取自检查器。
+
+验收两条路径：
+
+```bash
+cd backend
+python -m pytest -q tests
+```
+
+`test_direct_status_write_fails_whole`（直接改投影应失败）与
+`test_projection_follows_last_effective_hop_after_load`（装载后投影随末 hop 变）。

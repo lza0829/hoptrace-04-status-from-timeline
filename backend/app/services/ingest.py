@@ -1,13 +1,22 @@
+"""装载批次。
+
+每一条写入正式时间线的 hop 成功后，都在**同一事务**内调用投影服务重算
+``status_proj`` 并追加状态证明；批次结束统一提交。
+
+因此装载后投影一定跟随正式线末有效 hop，任何一步失败整批回滚，
+不会出现「正式线已变、投影仍是旧值」的分叉。
+"""
+
 import json
 import uuid
 from datetime import datetime, timezone
 
 from app.db import FIXTURES_DIR, connect
-from app.seed import map_status
+from app.services import projection
+from app.services import timeline as timeline_svc
 
 
 def run_batch() -> dict:
-    """基座装载：按夹具追加；乱序重排 / 旁路 / 重复隔离留给功能题空桩。"""
     path = FIXTURES_DIR / "ingest_batch.json"
     if not path.exists():
         return {"ok": False, "error": "缺少 ingest_batch.json"}
@@ -20,6 +29,7 @@ def run_batch() -> dict:
     try:
         conn.execute("BEGIN IMMEDIATE")
         written = 0
+        redrawn: set[str] = set()
         for hop in hops:
             wid = hop["waybill_id"]
             exists = conn.execute("SELECT 1 FROM waybills WHERE id=?", (wid,)).fetchone()
@@ -28,33 +38,16 @@ def run_batch() -> dict:
                     "INSERT INTO waybills(id, title, status_proj, created_at) VALUES (?,?,?,?)",
                     (wid, hop.get("waybill_title") or wid, "未知", _now()),
                 )
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO hops(id, waybill_id, event_ts, location_code, event_code, seq, channel)
-                VALUES (?,?,?,?,?,?, 'primary')
-                """,
-                (
-                    hop["id"],
-                    wid,
-                    hop["event_ts"],
-                    hop["location_code"],
-                    hop["event_code"],
-                    hop.get("seq"),
-                ),
-            )
-            if conn.execute("SELECT changes()").fetchone()[0]:
+            outcome = projection.load_hop(conn, hop)
+            if outcome["written"]:
                 written += 1
-                proj = map_status(hop["event_code"])
-                conn.execute("UPDATE waybills SET status_proj=? WHERE id=?", (proj, wid))
-                conn.execute(
-                    "INSERT INTO status_proofs(waybill_id, last_hop_id, mapped_code, proj_value, created_at) VALUES (?,?,?,?,?)",
-                    (wid, hop["id"], hop["event_code"], proj, _now()),
-                )
+                redrawn.add(wid)
         report = {
             "batch_id": batch_id,
             "cutoff_ts": cutoff,
             "written": written,
             "input": len(hops),
+            "projection_redrawn": sorted(redrawn),
         }
         conn.execute(
             "INSERT OR REPLACE INTO ingest_batches(id, cutoff_ts, created_at, report_json) VALUES (?,?,?,?)",

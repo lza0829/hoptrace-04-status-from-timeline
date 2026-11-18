@@ -4,6 +4,7 @@ import Ingest from './pages/Ingest.vue'
 import Quarantine from './pages/Quarantine.vue'
 import Sidecar from './pages/Sidecar.vue'
 import Proofs from './pages/Proofs.vue'
+import StatusProof from './pages/StatusProof.vue'
 
 export default createRouter({
   history: createWebHistory(),
@@ -13,5 +14,6 @@ export default createRouter({
     { path: '/quarantine', component: Quarantine },
     { path: '/sidecar', component: Sidecar },
     { path: '/proofs', component: Proofs },
+    { path: '/status', component: StatusProof },
   ],
 })
